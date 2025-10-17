@@ -1,0 +1,18 @@
+static_library("barrier_gate_client") {  
+  sources = [
+    # 根据功能划分文件
+    "demo_entry_cmsis.c",     # 入口和主线程 源文件
+    "udp_client_test.c",      # UDP客户端测试 源文件
+    "oled_ssd1306.c",              # oled 显示屏驱动文件
+    "wifi_connecter.c",       # wifi
+    "robot_sg90.c"            #sg90 舵机
+
+  ]
+
+  include_dirs = [
+    "//utils/native/lite/include",
+    "//kernel/liteos_m/kal/cmsis",
+    "//base/iot_hardware/peripheral/interfaces/kits",
+    "//foundation/communication/wifi_lite/interfaces/wifiservice",    # HAL接口中的WiFi接口
+  ]
+}
