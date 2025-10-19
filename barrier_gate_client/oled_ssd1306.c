@@ -51,35 +51,6 @@ typedef struct
     unsigned int receiveLen;
 } IotI2cData;
 
-
-// oled_ssd1306.c (新增函数实现)
-void OledShowCNChar(uint8_t x, uint8_t y, uint8_t index)
-{
-    uint8_t i, j;
-    // 确保 x, y, index 在安全范围内
-    if (x > (OLED_WIDTH - 16) || y > (8 - 2) || index >= (sizeof(F16X16_CN) / sizeof(F16X16_CN[0]))) {
-        return;
-    }
-
-    uint8_t *dot_ptr = F16X16_CN[index];
-
-    // 1. 显示上半部分 (Page y)
-    OledSetPosition(x, y);
-    // 写入上半部分 (16列, 每列 1 字节)
-    for (i = 0; i < 16; i++)
-    {
-        WriteData(dot_ptr[i]);
-    }
-
-    // 2. 显示下半部分 (Page y+1)
-    OledSetPosition(x, y + 1);
-    // 写入下半部分 (16列, 每列 1 字节)
-    for (j = 0; j < 16; j++)
-    {
-        WriteData(dot_ptr[16 + j]);
-    }
-}
-
 /// @brief  向OLED写一个字节
 /// @param  regAddr 写入命令还是数据 OLED_I2C_CMD / OLED_I2C_DATA
 /// @param  byte 写入的内容

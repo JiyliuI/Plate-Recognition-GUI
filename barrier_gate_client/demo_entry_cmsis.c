@@ -1,50 +1,39 @@
-#include <stdio.h>          // 标准输入输出
-#include <unistd.h>         // POSIX标准接口
-#include <string.h>         // 字符串处理(操作字符数组)
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
 
-#include "ohos_init.h"      // 用于初始化服务(services)和功能(features)
-#include "cmsis_os2.h"      // CMSIS-RTOS API V2
+#include "ohos_init.h"
+#include "cmsis_os2.h"
 
-#include "wifi_connecter.h" // easy wifi (station模式)
-#include "oled_ssd1306.h"        // OLED驱动接口
+#include "wifi_connecter.h"
+#include "oled_ssd1306.h"
 #include "iot_gpio.h"
 #include "hi_io.h"
 #include "hi_time.h"
-#include "iot_gpio.h"
 #include "hi_adc.h"
 #include "iot_errno.h"
-#if 1
-// 定义一个宏，用于标识SSID。请根据实际情况修改
-#define PARAM_HOTSPOT_SSID "Xiaomi_zhangting"
 
-// 定义一个宏，用于标识密码。请根据实际情况修改
-#define PARAM_HOTSPOT_PSK "dyjy2020123..."
-#elif
-#define PARAM_HOTSPOT_SSID "DYJY"
-
-// 定义一个宏，用于标识密码。请根据实际情况修改
+// WiFi配置 - 连接到电脑热点
+#define PARAM_HOTSPOT_SSID "jiy"
 #define PARAM_HOTSPOT_PSK "12345678"
-#endif
-// 定义一个宏，用于标识加密方式
 #define PARAM_HOTSPOT_TYPE WIFI_SEC_TYPE_PSK
 
-// 定义一个宏，用于标识UDP服务器IP地址。请根据实际情况修改
-#define PARAM_SERVER_ADDR "192.168.5.74"
+// 服务器配置 - 电脑热点IP
+#define PARAM_SERVER_ADDR "192.168.137.1"
+#define PARAM_SERVER_PORT 8081
 
+// 硬件配置
 #define GPIO5 5
-#define     ADC_TEST_LENGTH             (20)
-#define     VLT_MIN                     (100)
-#define     KEY_INTERRUPT_PROTECT_TIME        (30)
+#define ADC_TEST_LENGTH 20
+#define VLT_MIN 100
+#define KEY_INTERRUPT_PROTECT_TIME 30
 
-unsigned short  g_adc_buf[ADC_TEST_LENGTH] = { 0 };
-unsigned short  g_gpio5_adc_buf[ADC_TEST_LENGTH] = { 0 };
-unsigned int  g_gpio5_tick = 0;
-
+unsigned short g_gpio5_adc_buf[ADC_TEST_LENGTH] = {0};
+unsigned int g_gpio5_tick = 0;
 int control_flag = 0;
-extern char response[128];
 
+// 完整汉字字库 - 包含34个省市简称
 uint8_t fonts3[] = {
-
     /*-- ID:0,字符:"京",ASCII编码:BEA9,对应字:宽x高=16x16,画布:宽W=16 高H=16,共32字节*/
     0x08,0x08,0x08,0xe8,0x28,0x28,0x29,0x2e,0x28,0x28,0x28,0xf8,0x28,0x0c,0x08,0x00,
     0x00,0x00,0x40,0x23,0x1a,0x42,0x82,0x7e,0x02,0x0a,0x12,0x33,0x60,0x00,0x00,0x00,
@@ -179,10 +168,15 @@ uint8_t fonts3[] = {
 
     /*-- ID:33,字符:"行",ASCII编码:D0D0,对应字:宽x高=16x16,画布:宽W=16 高H=16,共32字节*/
     0x00,0x10,0x88,0xc4,0x23,0x40,0x42,0x42,0x42,0x42,0x42,0xc2,0x43,0x62,0x40,0x00,
-    0x02,0x01,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x40,0x80,0x7f,0x00,0x00,0x00,0x00};
+    0x02,0x01,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x40,0x80,0x7f,0x00,0x00,0x00,0x00
+};
 
-// 定义一个宏，用于标识UDP服务器端口
-#define PARAM_SERVER_PORT 8081
+// 函数声明
+void engine_turn_left(void);
+void engine_turn_right(void);
+void regress_middle(void);
+void UdpClientTest(const char *host, unsigned short port);
+void process_command(const char* command);
 
 void switch_init(void)
 {
@@ -192,22 +186,26 @@ void switch_init(void)
     hi_io_set_pull(5, 1);
 }
 
-//按键中断响应函数
 void gpio5_isr_func_mode(void)
 {
-    printf("gpio5_isr_func_mode start\n");
-    unsigned int tick_interval = 0;
-    unsigned int current_gpio5_tick = 0; 
+    printf("Button pressed\n");
+    unsigned int current_gpio5_tick = hi_get_tick();
+    unsigned int tick_interval = current_gpio5_tick - g_gpio5_tick;
 
-    current_gpio5_tick = hi_get_tick();
-    tick_interval = current_gpio5_tick - g_gpio5_tick;
-    
-    if (tick_interval < KEY_INTERRUPT_PROTECT_TIME) {  
-        return NULL;
+    if (tick_interval < KEY_INTERRUPT_PROTECT_TIME) {
+        return;
     }
     g_gpio5_tick = current_gpio5_tick;
     control_flag = !control_flag;
-    
+
+    // 控制舵机
+    if (control_flag) {
+        engine_turn_left();
+        printf("Barrier UP - Local Control\n");
+    } else {
+        engine_turn_right();
+        printf("Barrier DOWN - Local Control\n");
+    }
 }
 
 unsigned char get_gpio5_voltage(void *param)
@@ -215,130 +213,108 @@ unsigned char get_gpio5_voltage(void *param)
     int i;
     unsigned short data;
     unsigned int ret;
-    unsigned short vlt;
     float voltage;
     float vlt_max = 0;
-    float vlt_min = VLT_MIN;
 
-    hi_unref_param(param);
-    memset_s(g_gpio5_adc_buf, sizeof(g_gpio5_adc_buf), 0x0, sizeof(g_gpio5_adc_buf));
     for (i = 0; i < ADC_TEST_LENGTH; i++) {
-        ret = hi_adc_read(HI_ADC_CHANNEL_2, &data, HI_ADC_EQU_MODEL_4, HI_ADC_CUR_BAIS_DEFAULT, 0xF0); 
-		//ADC_Channal_2  自动识别模式  CNcomment:4次平均算法模式 CNend */
+        ret = hi_adc_read(HI_ADC_CHANNEL_2, &data, HI_ADC_EQU_MODEL_4, HI_ADC_CUR_BAIS_DEFAULT, 0xF0);
         if (ret != IOT_SUCCESS) {
             printf("ADC Read Fail\n");
-            return  NULL;
-        }    
+            return 0;
+        }
         g_gpio5_adc_buf[i] = data;
     }
 
-    for (i = 0; i < ADC_TEST_LENGTH; i++) {  
-        vlt = g_gpio5_adc_buf[i]; 
-        voltage = (float)vlt * 1.8 * 4 / 4096.0;  
-		/* vlt * 1.8* 4 / 4096.0为将码字转换为电压 */
+    for (i = 0; i < ADC_TEST_LENGTH; i++) {
+        voltage = (float)g_gpio5_adc_buf[i] * 1.8 * 4 / 4096.0;
         vlt_max = (voltage > vlt_max) ? voltage : vlt_max;
-        vlt_min = (voltage < vlt_min) ? voltage : vlt_min;
     }
-    printf("vlt_max is %f\r\n", vlt_max);
+
+    printf("Voltage: %f\r\n", vlt_max);
     if (vlt_max > 0.6 && vlt_max < 1.0) {
         gpio5_isr_func_mode();
-    } 
+    }
+    return 0;
 }
 
-//按键中断
 void interrupt_monitor(void)
 {
-    unsigned int  ret = 0;
-    /*gpio5 switch2 mode*/
+    unsigned int ret = 0;
     g_gpio5_tick = hi_get_tick();
     ret = IoTGpioRegisterIsrFunc(GPIO5, IOT_INT_TYPE_EDGE, IOT_GPIO_EDGE_FALL_LEVEL_LOW, get_gpio5_voltage, NULL);
     if (ret == IOT_SUCCESS) {
-        printf(" register gpio5\r\n");
+        printf("Button interrupt registered\n");
     }
 }
+
 void OledShowChinese3(uint8_t x, uint8_t y, uint8_t idx)
 {
-    // 控制循环
     uint8_t t;
-
-    // 显示汉字的上半部分
     OledSetPosition(x, y);
-    for (t = 0; t < 16; t++)
-    {
+    for (t = 0; t < 16; t++) {
         WriteData(fonts3[32 * idx + t]);
     }
-
-    // 显示汉字的下半部分
     OledSetPosition(x, y + 1);
-    for (t = 16; t < 32; t++)
-    {
+    for (t = 16; t < 32; t++) {
         WriteData(fonts3[32 * idx + t]);
     }
 }
-// 主线程函数
+
+void show_status(const char* status, int chinese_idx)
+{
+    OledFillScreen(0x00);
+    OledShowString(0, 0, "Barrier Gate", FONT8x16);
+    OledShowString(0, 2, "Status:", FONT8x16);
+    OledShowString(48, 2, status, FONT8x16);
+    if (chinese_idx >= 0) {
+        OledShowChinese3(80, 2, chinese_idx);
+    }
+}
+
 static void NetDemoTask(void *arg)
 {
     (void)arg;
-    
-    int control_temp = 0;
-    // 定义热点配置
+
     WifiDeviceConfig config = {0};
-
-    // 设置热点配置中的SSID
     strcpy(config.ssid, PARAM_HOTSPOT_SSID);
-
-    // 设置热点配置中的密码
     strcpy(config.preSharedKey, PARAM_HOTSPOT_PSK);
-
-    // 设置热点配置中的加密方式(Wi-Fi security types)
     config.securityType = PARAM_HOTSPOT_TYPE;
 
-    // 等待100ms
-    osDelay(10);
+    osDelay(100);
 
-    // 连接到热点
+    // 连接热点
     int netId = ConnectToHotspot(&config);
-
-    // 检查是否成功连接到热点
-    if (netId < 0)
-    {
-        // 连接到热点失败
-        printf("ConnectToAP failed\n"); 
-        OledFillScreen(0x00);                                    // 输出错误信息
-        OledShowString(0, 0, "Connect to AP failed", FONT8x16);
+    if (netId < 0) {
+        printf("WiFi Connect failed\n");
+        show_status("WiFi Fail", -1);
         return;
     }
-    
-    // 连接到热点成功，显示连接成功信息
-    printf("AP:connected\n");
-    OledFillScreen(0x00);
-    OledShowString(0, 0, "AP:connected", FONT8x16);
-    
-    // 运行UDP客户端测试
+
+    printf("WiFi Connected to Data1\n");
+    show_status("WiFi OK", -1);
+    osDelay(1000);
+
+    // 运行UDP客户端
     UdpClientTest(PARAM_SERVER_ADDR, PARAM_SERVER_PORT);
 
-    // 断开热点连接
-    printf("disconnect to AP ...\r\n");
     DisconnectWithHotspot(netId);
-    printf("disconnect to AP done!\r\n");
 }
 
-// 入口函数
 static void NetDemoEntry(void)
 {
     switch_init();
     interrupt_monitor();
-    // 初始化OLED
+
     OledInit();
-
-    // 全屏填充黑色
     OledFillScreen(0x00);
+    OledShowString(0, 0, "Barrier System", FONT8x16);
+    OledShowString(0, 2, "Booting...", FONT8x16);
 
-    // OLED显示APP标题
-    OledShowString(0, 0, "UdpClient Test", FONT8x16);
+    // 初始化舵机
+    regress_middle();
 
+    osDelay(1000);
 
-    // 定义线程属性
     osThreadAttr_t attr;
     attr.name = "NetDemoTask";
     attr.attr_bits = 0U;
@@ -347,12 +323,10 @@ static void NetDemoEntry(void)
     attr.stack_mem = NULL;
     attr.stack_size = 10240;
     attr.priority = osPriorityNormal;
-    // 创建线程
-    if (osThreadNew(NetDemoTask, NULL, &attr) == NULL)
-    {
-        printf("[NetDemoEntry] Falied to create NetDemoTask!\n");
+
+    if (osThreadNew(NetDemoTask, NULL, &attr) == NULL) {
+        printf("Failed to create NetDemoTask!\n");
     }
 }
 
-// 运行入口函数
 SYS_RUN(NetDemoEntry);

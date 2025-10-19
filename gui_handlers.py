@@ -9,6 +9,63 @@ import socket
 import sys
 import sqlite3
 
+# 文本转语音（本地）
+try:
+    import pyttsx3
+
+    _tts_engine = pyttsx3.init()
+
+    try:
+        voices = _tts_engine.getProperty('voices')
+        selected_voice_id = None
+        for v in voices:
+            name = getattr(v, 'name', '') or ''
+            lang_list = getattr(v, 'languages', []) or []
+            lang_text = ' '.join([
+                (x.decode('utf-8', errors='ignore') if isinstance(x, (bytes, bytearray)) else str(x))
+                for x in lang_list
+            ])
+            vid = getattr(v, 'id', '') or ''
+            check_text = f"{name} {lang_text} {vid}".lower()
+            if ('zh' in check_text) or ('chinese' in check_text) or ('cmn' in check_text):
+                selected_voice_id = v.id
+                break
+        if selected_voice_id:
+            _tts_engine.setProperty('voice', selected_voice_id)
+        # 设置适中的语速与音量
+        try:
+            rate = _tts_engine.getProperty('rate')
+            if isinstance(rate, int):
+                _tts_engine.setProperty('rate', max(80, min(rate, 150)))
+            _tts_engine.setProperty('volume', 1.0)
+        except Exception:
+            pass
+    except Exception:
+        pass
+except Exception:
+    pyttsx3 = None
+    _tts_engine = None
+
+
+def speak_text(text):
+    """使用本地扬声器播报文本（失败时静默忽略）。"""
+    try:
+        if _tts_engine is None:
+            return
+
+        # 避免阻塞UI线程，开子线程执行朗读
+        def _run():
+            try:
+                _tts_engine.say(text)
+                _tts_engine.runAndWait()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+    except Exception:
+        pass
+
 
 # 确保在运行前创建 plate_utils.py 和 plate_recognition.py
 try:
@@ -99,7 +156,7 @@ class DatabaseManager:
             ('沪B99999', '普通车牌', '授权测试车辆3'),
             ('粤C11111', '普通车牌', '授权测试车辆4')
         ]
-        
+
         for plate_number, plate_type, comment in test_plates:
             try:
                 self.cursor.execute("""
@@ -109,7 +166,7 @@ class DatabaseManager:
             except sqlite3.IntegrityError:
                 # UNIQUE 约束冲突，忽略
                 pass
-        
+
         self.conn.commit()
         print("[DB] 测试数据插入完成。")
 
@@ -209,6 +266,7 @@ class DatabaseManager:
             self.conn.close()
             print("[DB] 数据库连接已关闭。")
 
+
 class GUIHandlers:
     """ 负责所有事件处理、业务逻辑、线程管理和资源操作 """
 
@@ -249,7 +307,7 @@ class GUIHandlers:
             # 发送车牌号到UDP服务器（服务器会进行数据库比对并发送结果给嵌入式设备）
             message = plate_number.encode('utf-8')
             self.udp_socket.sendto(message, (self.udp_server_ip, self.udp_server_port))
-            
+
             print(f"[UDP] 成功发送车牌号: {plate_number}")
             self.root.after(0, lambda: self.system_status.set(
                 f"🟢 车牌: {plate_number} | UDP 发送成功 | 等待服务器处理"
@@ -312,16 +370,17 @@ class GUIHandlers:
 
             if cropped_results:
                 plate_number, plate_image = cropped_results[0]  # 只处理第一个识别结果
-                
+
                 # 存储识别结果，等待"开始识别"按钮点击
                 self.last_recognition_result = (plate_number, plate_image)
                 self.recognition_source_type = "file"
-                
+
                 # 更新界面显示
                 self.root.after(0, lambda: self.plate_number_var.set(plate_number))
                 self.root.after(0, lambda: self.process_time_var.set(f"{_runtime:.2f}秒"))
                 self.root.after(0, lambda: self.plate_image_label.config(text="车牌已校正", bg='#d5edff'))
-                self.root.after(0, lambda: self.system_status.set(f"🟢 识别完成 | 车牌: {plate_number} | 点击'开始识别'进行判断"))
+                self.root.after(0, lambda: self.system_status.set(
+                    f"🟢 识别完成 | 车牌: {plate_number} | 点击'开始识别'进行判断"))
 
                 # 更新校正车牌图像显示
                 self.root.after(0, lambda: self.update_plate_image_display(plate_image))
@@ -337,33 +396,39 @@ class GUIHandlers:
         if not self.last_recognition_result:
             messagebox.showwarning("警告", "请先进行车牌识别（选择图片、视频或打开摄像头）")
             return
-        
+
         plate_number, plate_image = self.last_recognition_result
         source_type = self.recognition_source_type or "unknown"
-        
+
         try:
             # 检查车牌是否在授权列表中
             is_authorized = self.db_manager.check_plate_exists(plate_number)
-            
+
             # 记录识别记录到数据库
             action_taken = "allow" if is_authorized else "deny"
             self.db_manager.add_recognition_record(
-                plate_number, 
-                source_type=source_type, 
-                is_authorized=is_authorized, 
+                plate_number,
+                source_type=source_type,
+                is_authorized=is_authorized,
                 action_taken=action_taken
             )
-            
+
             # 更新状态显示
             status_msg = "授权通过" if is_authorized else "未授权"
             self.system_status.set(f"🟢 识别判断完成 | 车牌: {plate_number} | 状态: {status_msg}")
-            
+
+            # 本地播报：车牌号 + 通/禁行
+            try:
+                speak_text(f"{plate_number}，{'通行' if is_authorized else '禁行'}")
+            except Exception:
+                pass
+
             # 发送UDP消息到服务器
             self.send_plate_number_via_udp(plate_number)
-            
+
             # 显示结果消息
             messagebox.showinfo("识别结果", f"车牌号码: {plate_number}\n授权状态: {status_msg}\n")
-            
+
         except Exception as e:
             print(f"开始识别处理错误: {e}")
             messagebox.showerror("错误", f"处理识别结果时出错: {str(e)}")
@@ -489,12 +554,12 @@ class GUIHandlers:
         try:
             # 保存到数据库
             success = self.db_manager.add_authorized_plate(plate_number, plate_type, "手动录入")
-            
+
             if success:
                 info_text = f"车牌号码: {plate_number}\n车牌类型: {plate_type}\n状态: 已保存到数据库"
                 messagebox.showinfo("保存成功", f"车牌信息已保存到数据库:\n\n{info_text}")
                 self.system_status.set(f"🟢 手动录入成功 | 车牌: {plate_number} | 已保存到数据库")
-                
+
                 # 清空表单
                 self.clear_manual_form()
             else:
@@ -511,14 +576,37 @@ class GUIHandlers:
         self.system_status.set("🟢 表单已清空")
 
     def open_barrier(self):
-        """ 打开路障 """
-        self.system_status.set("🟢 系统运行正常 | 路障状态: 已开启 | 注意安全")
-        messagebox.showinfo("控制", "路障已打开")
+        """ 打开路障 - 发送控制指令到服务器 """
+        try:
+            # 发送打开路障指令
+            # 假设协议：发送 "OPEN" 指令
+            message = "OPEN".encode('utf-8')
+            self.udp_socket.sendto(message, (self.udp_server_ip, self.udp_server_port))
+
+            self.system_status.set("🟢 系统运行正常 | 路障状态: 已开启 | 注意安全")
+            print(f"[UDP] 发送打开路障指令到 {self.udp_server_ip}:{self.udp_server_port}")
+            messagebox.showinfo("控制", "路障已打开指令已发送")
+
+        except Exception as e:
+            error_msg = f"发送打开路障指令失败: {str(e)}"
+            print(f"[UDP ERROR] {error_msg}")
+            self.system_status.set(f"🔴 {error_msg}")
+            messagebox.showerror("错误", error_msg)
 
     def close_barrier(self):
-        """ 关闭路障 """
-        self.system_status.set("🟢 系统运行正常 | 路障状态: 已关闭")
-        messagebox.showinfo("控制", "路障已关闭")
+        try:
+            message = "CLOSE".encode('utf-8')
+            self.udp_socket.sendto(message, (self.udp_server_ip, self.udp_server_port))
+
+            self.system_status.set("🟢 系统运行正常 | 路障状态: 已关闭")
+            print(f"[UDP] 发送关闭路障指令到 {self.udp_server_ip}:{self.udp_server_port}")
+            messagebox.showinfo("控制", "路障已关闭指令已发送")
+
+        except Exception as e:
+            error_msg = f"发送关闭路障指令失败: {str(e)}"
+            print(f"[UDP ERROR] {error_msg}")
+            self.system_status.set(f"🔴 {error_msg}")
+            messagebox.showerror("错误", error_msg)
 
     def close_camera(self):
         """ 关闭相机和识别功能 """
@@ -902,57 +990,55 @@ class GUIHandlers:
             )
             print(f"show_video_viewer error: {e}")
 
-    def send_plate_status_to_udp_server(self, plate_number, is_authorized):
-        """
-        构建 9 字节 UDP 协议数据包 (1字节汉字索引 + 7字节车牌剩余部分 + 1字节状态索引)
-        并发送给 UDP 服务器 (udp_server.py)
-        """
-        if not self.udp_socket:
-            print("[UDP] 警告: UDP 客户端未初始化，无法发送数据。")
+
+def send_plate_status_to_udp_server(self, plate_number, is_authorized):
+    """
+    构建 UDP 协议数据包
+    - 授权时: 发送状态 0
+    - 未授权时: 发送状态 1
+    """
+    if not self.udp_socket:
+        print("[UDP] 警告: UDP 客户端未初始化，无法发送数据。")
+        return
+
+    try:
+        # 1. 解析车牌
+        chinese_char = plate_number[0]
+        rest_plate = plate_number[1:]
+
+        # 2. 获取汉字索引
+        chinese_index = self.CHINESE_PLATE_MAPPING.get(chinese_char)
+        if chinese_index is None:
+            print(f"[UDP] 错误: 未知汉字 '{chinese_char}'，无法发送。")
             return
 
-        try:
-            # 1. 解析车牌
-            chinese_char = plate_number[0]
-            rest_plate = plate_number[1:]
+        # 3. 根据授权状态设置状态位
+        # 授权通过发0，未授权通过发1
+        status_byte = 0 if is_authorized else 1
+        status_msg = "授权通过" if is_authorized else "未授权拒绝"
 
-            # 2. 获取汉字索引 (1字节)
-            chinese_index = self.CHINESE_PLATE_MAPPING.get(chinese_char)
-            if chinese_index is None:
-                print(f"[UDP] 错误: 未知汉字 '{chinese_char}'，无法发送。")
-                return
+        # 4. 格式化车牌剩余部分 (7字节 ASCII)
+        formatted_rest = rest_plate.ljust(7, ' ')[:7]
+        plate_bytes = formatted_rest.encode('ascii')
 
-            # 3. 获取状态索引 (1字节)
-            if is_authorized:
-                status_index = self.CHINESE_PLATE_MAPPING['通']  # 32 (允许放行)
-                status_msg = "允许放行"
-            else:
-                status_index = self.CHINESE_PLATE_MAPPING['禁']  # 31 (拒绝放行)
-                status_msg = "拒绝放行"
+        if len(plate_bytes) != 7:
+            print(f"[UDP] 格式错误: 车牌剩余部分长度不为7: {len(plate_bytes)}")
+            return
 
-            # 4. 格式化车牌剩余部分 (7字节 ASCII)
-            # 填充或截断到 7 个字符
-            formatted_rest = rest_plate.ljust(7, ' ')[:7]
+        # 5. 构建 9 字节数据包
+        # 结构: [1字节汉字索引] + [7字节车牌剩余部分] + [1字节状态位]
+        car_data = bytes([chinese_index]) + plate_bytes + bytes([status_byte])
 
-            # 5. 构建 9 字节数据包
-            # 汉字索引 (uint8) + 车牌剩余部分 (7 chars) + 状态索引 (uint8)
-            # 转换为字节串
-            plate_bytes = formatted_rest.encode('ascii')
+        print(f"[UDP] 发送 9 字节数据: {list(car_data)}")
+        print(
+            f"      数据内容: 汉字索引={chinese_index}, 车牌='{chinese_char}{rest_plate}', 状态={status_byte}({status_msg})")
 
-            # 确保数据长度正确
-            if len(plate_bytes) != 7:
-                print(f"[UDP] 格式错误: 车牌剩余部分长度不为7: {len(plate_bytes)}")
-                return
+        # 6. 发送数据
+        self.udp_socket.sendto(car_data, (self.udp_server_ip, self.udp_server_port))
 
-            # 使用 bytes() 拼接三个部分
-            car_data = bytes([chinese_index]) + plate_bytes + bytes([status_index])
+        print(f"[UDP] 成功发送数据到服务器: {self.udp_server_ip}:{self.udp_server_port}")
+        print(f"      状态: {status_msg}")
 
-            # 6. 发送数据
-            self.udp_socket.sendto(car_data, (self.udp_server_ip, self.udp_server_port))
-
-            print(f"[UDP] 成功发送 9 字节数据到服务器: {self.udp_server_ip}:{self.udp_server_port}")
-            print(f"      数据内容: '{chinese_char}{rest_plate}' | 状态: {status_msg} | 字节: {list(car_data)}")
-
-        except Exception as e:
-            messagebox.showerror("UDP错误", f"发送 UDP 数据失败: {e}")
-            print(f"[UDP ERROR] 发送数据失败: {e}")
+    except Exception as e:
+        print(f"[UDP ERROR] 发送数据失败: {e}")
+        self.root.after(0, lambda: messagebox.showerror("UDP错误", f"发送 UDP 数据失败: {e}"))

@@ -120,4 +120,3 @@ void DisconnectWithHotspot(int netId)
     errCode = DisableWifi();
     printf("DisableWifi: %d\r\n", errCode);
 }
-

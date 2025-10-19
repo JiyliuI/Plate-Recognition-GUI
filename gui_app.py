@@ -24,6 +24,7 @@ class LicensePlateRecognitionSystem(GUIStyles, GUIHandlers):
     继承 GUIStyles 处理样式和界面创建。
     继承 GUIHandlers 处理事件和业务逻辑。
     """
+
     def __init__(self, root):
         self.root = root
         self.root.title("基于深度学习的车牌识别系统")
@@ -45,7 +46,7 @@ class LicensePlateRecognitionSystem(GUIStyles, GUIHandlers):
         self.is_video_playing = False
         self.is_video_detecting = False
         self.video_thread = None
-        
+
         # 识别结果存储变量
         self.last_recognition_result = None  # 存储最后一次识别结果 (plate_number, plate_image)
         self.recognition_source_type = None  # 识别来源类型 (file/camera)
@@ -70,7 +71,6 @@ class LicensePlateRecognitionSystem(GUIStyles, GUIHandlers):
         self.video_container = None
         self.video_label = None
         self.system_status = tk.StringVar(value="🟢 系统运行正常 | 摄像头: 未连接 | 识别模型: 已加载")
-
 
         # 初始化 UI 和 UDP 客户端
         self.setup_styles()

@@ -27,15 +27,5 @@ typedef enum Font Font;
 void OledShowChar(uint8_t x, uint8_t y, uint8_t ch, Font font);
 void OledShowString(uint8_t x, uint8_t y, const char* str, Font font);
 
-// oled_ssd1306.h (新增函数声明)
-
-/**
- * @brief 显示 16x16 的汉字 (占 2 个 Page)
- * @param x 起始 x 坐标 (0-112)
- * @param y 起始 y 坐标 (Page，0-6)
- * @param index 汉字在 F16X16_CN 数组中的索引 (0-35)
- */
-void OledShowCNChar(uint8_t x, uint8_t y, uint8_t index);
-
 // 条件编译结束
 #endif // OLED_SSD1306_H
